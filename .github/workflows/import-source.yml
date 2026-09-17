@@ -1,0 +1,65 @@
+name: Import production source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'staging/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  import-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat staging/part-* > /tmp/source.b64
+          base64 -d /tmp/source.b64 > /tmp/source.tar.xz
+          xz -t /tmp/source.tar.xz
+          mkdir -p /tmp/source
+          tar -xJf /tmp/source.tar.xz -C /tmp/source
+
+      - name: Publish source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude 'staging/' \
+            --exclude 'dist/' \
+            --exclude '.github/workflows/import-source.yml' \
+            /tmp/source/ ./
+
+          mkdir -p assets/fonts
+          base='https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts'
+          for file in Vazirmatn-Regular.woff2 Vazirmatn-Medium.woff2 Vazirmatn-Bold.woff2 Vazirmatn-Black.woff2; do
+            curl -fL --retry 3 "$base/$file" -o "assets/fonts/$file"
+          done
+
+          mkdir -p dist
+          zip -qr dist/mobile-store-v41-production.zip . \
+            -x '.git/*' 'staging/*' 'dist/*' 'config.php' 'data/*.db' 'uploads/products/*' 'uploads/videos/*'
+
+          rm -rf staging
+          rm -f .github/workflows/import-source.yml
+
+      - name: Commit production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'feat: publish production source v4.1'
+          git push origin HEAD:main
